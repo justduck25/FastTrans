@@ -19,6 +19,7 @@ constexpr UINT kTrayMessage = WM_APP + 1;
 
 struct Settings {
     std::wstring targetLanguage = L"vi";
+    std::wstring ocrProvider = L"windows";
     std::wstring ocrLanguage;
     bool saveHistory = false;
 };

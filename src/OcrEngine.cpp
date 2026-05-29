@@ -1,5 +1,7 @@
 #include "OcrEngine.h"
 
+#include "TextUtil.h"
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.h>
@@ -53,6 +55,168 @@ std::vector<uint8_t> HBitmapToBmpBytes(HBITMAP bitmap, SIZE size) {
     offset += sizeof(info);
     std::memcpy(bytes.data() + offset, pixels.data(), pixels.size());
     return bytes;
+}
+
+std::wstring ModuleDirectory() {
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    std::wstring directory = path;
+    const size_t slash = directory.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        directory.resize(slash);
+    }
+    return directory;
+}
+
+std::wstring Quote(std::wstring_view value) {
+    std::wstring quoted = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'"') {
+            quoted += L"\\\"";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted += L"\"";
+    return quoted;
+}
+
+bool FileExists(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool DirectoryExists(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+std::optional<std::wstring> WriteTempBmp(const std::vector<uint8_t>& bytes) {
+    wchar_t tempDirectory[MAX_PATH]{};
+    if (GetTempPathW(MAX_PATH, tempDirectory) == 0) {
+        return std::nullopt;
+    }
+
+    wchar_t tempPath[MAX_PATH]{};
+    if (GetTempFileNameW(tempDirectory, L"jdt", 0, tempPath) == 0) {
+        return std::nullopt;
+    }
+
+    std::wstring bmpPath = tempPath;
+    bmpPath += L".bmp";
+    MoveFileExW(tempPath, bmpPath.c_str(), MOVEFILE_REPLACE_EXISTING);
+
+    HANDLE file = CreateFileW(bmpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DeleteFileW(bmpPath.c_str());
+        return std::nullopt;
+    }
+
+    DWORD written = 0;
+    const BOOL ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(file);
+    if (!ok || written != bytes.size()) {
+        DeleteFileW(bmpPath.c_str());
+        return std::nullopt;
+    }
+    return bmpPath;
+}
+
+std::wstring TesseractLanguageFor(const std::wstring& language) {
+    if (language.empty()) return L"eng+vie";
+    if (language.rfind(L"en", 0) == 0) return L"eng";
+    if (language.rfind(L"vi", 0) == 0) return L"vie";
+    if (language.rfind(L"ja", 0) == 0) return L"jpn";
+    if (language.rfind(L"ko", 0) == 0) return L"kor";
+    if (language == L"zh-Hans") return L"chi_sim";
+    if (language == L"zh-Hant") return L"chi_tra";
+    if (language.rfind(L"fr", 0) == 0) return L"fra";
+    if (language.rfind(L"de", 0) == 0) return L"deu";
+    if (language.rfind(L"es", 0) == 0) return L"spa";
+    if (language.rfind(L"it", 0) == 0) return L"ita";
+    if (language.rfind(L"pt", 0) == 0) return L"por";
+    if (language.rfind(L"ru", 0) == 0) return L"rus";
+    if (language.rfind(L"th", 0) == 0) return L"tha";
+    return L"eng";
+}
+
+std::optional<std::string> RunProcessCaptureStdout(std::wstring commandLine) {
+    SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    if (!CreatePipe(&readPipe, &writePipe, &security, 0)) {
+        return std::nullopt;
+    }
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = writePipe;
+    startup.hStdError = writePipe;
+
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                        nullptr, nullptr, &startup, &process);
+    CloseHandle(writePipe);
+    if (!created) {
+        CloseHandle(readPipe);
+        return std::nullopt;
+    }
+
+    std::string output;
+    char buffer[4096]{};
+    DWORD read = 0;
+    while (ReadFile(readPipe, buffer, static_cast<DWORD>(sizeof(buffer)), &read, nullptr) && read > 0) {
+        output.append(buffer, buffer + read);
+    }
+
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(process.hProcess, &exitCode);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    CloseHandle(readPipe);
+
+    if (exitCode != 0) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Settings& settings) {
+    OcrResult output;
+    const std::vector<uint8_t> bytes = HBitmapToBmpBytes(bitmap, size);
+    if (bytes.empty()) {
+        return output;
+    }
+
+    const std::wstring moduleDir = ModuleDirectory();
+    const std::wstring tesseractExe = moduleDir + L"\\third_party\\tesseract\\tesseract.exe";
+    const std::wstring tessdataDir = moduleDir + L"\\third_party\\tesseract\\tessdata";
+    if (!FileExists(tesseractExe) || !DirectoryExists(tessdataDir)) {
+        return output;
+    }
+
+    auto imagePath = WriteTempBmp(bytes);
+    if (!imagePath) {
+        return output;
+    }
+
+    const std::wstring language = TesseractLanguageFor(settings.ocrLanguage);
+    const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
+                                 L" stdout -l " + language + L" --tessdata-dir " +
+                                 Quote(tessdataDir) + L" --psm 6";
+
+    auto processOutput = RunProcessCaptureStdout(command);
+    DeleteFileW(imagePath->c_str());
+    if (!processOutput) {
+        return output;
+    }
+
+    output.text = Trim(Utf8ToWide(*processOutput));
+    return output;
 }
 
 std::optional<CapturedBitmap> ScaleBitmapForOcr(HBITMAP sourceBitmap, SIZE sourceSize) {
@@ -357,6 +521,10 @@ OcrResult OcrEngine::Recognize(const CapturedBitmap& capture, const Settings& se
     auto scaled = ScaleBitmapForOcr(capture.bitmap, capture.size);
     HBITMAP ocrBitmap = scaled ? scaled->bitmap : capture.bitmap;
     SIZE ocrSize = scaled ? scaled->size : capture.size;
+
+    if (settings.ocrProvider == L"tesseract") {
+        return RecognizeWithBundledTesseract(ocrBitmap, ocrSize, settings);
+    }
 
     auto bytes = HBitmapToBmpBytes(ocrBitmap, ocrSize);
     if (bytes.empty()) {

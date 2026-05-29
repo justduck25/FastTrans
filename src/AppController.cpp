@@ -20,6 +20,7 @@ constexpr UINT kSettingsCancel = 4002;
 constexpr UINT kSettingsTargetCombo = 4003;
 constexpr UINT kSettingsHistoryCheck = 4004;
 constexpr UINT kSettingsOcrCombo = 4005;
+constexpr UINT kSettingsProviderCombo = 4006;
 
 void AddTrayIcon(HWND hwnd) {
     NOTIFYICONDATAW nid{sizeof(nid)};
@@ -54,6 +55,28 @@ struct LanguageOption {
 
 constexpr LanguageOption kTargetLanguages[] = {
     {L"Vietnamese", L"vi"},
+};
+
+constexpr LanguageOption kOcrProviders[] = {
+    {L"Windows OCR", L"windows"},
+    {L"Bundled Tesseract", L"tesseract"},
+};
+
+constexpr LanguageOption kTesseractLanguages[] = {
+    {L"Auto English + Vietnamese", L""},
+    {L"English", L"en-US"},
+    {L"Vietnamese", L"vi-VN"},
+    {L"Japanese", L"ja-JP"},
+    {L"Korean", L"ko-KR"},
+    {L"Chinese Simplified", L"zh-Hans"},
+    {L"Chinese Traditional", L"zh-Hant"},
+    {L"French", L"fr-FR"},
+    {L"German", L"de-DE"},
+    {L"Spanish", L"es-ES"},
+    {L"Italian", L"it-IT"},
+    {L"Portuguese", L"pt-BR"},
+    {L"Russian", L"ru-RU"},
+    {L"Thai", L"th-TH"},
 };
 
 HFONT DialogFont() {
@@ -97,6 +120,23 @@ std::wstring SelectedLanguageCode(HWND hwnd, UINT controlId) {
     return code ? std::wstring(code) : std::wstring();
 }
 
+void FillTesseractLanguages(HWND combo, SettingsDialogState& state) {
+    state.ocrCodes.clear();
+    int selected = 0;
+    const std::wstring selectedCode = Trim(state.settings.ocrLanguage);
+
+    for (size_t i = 0; i < std::size(kTesseractLanguages); ++i) {
+        state.ocrCodes.push_back(kTesseractLanguages[i].code);
+        const std::wstring text = LanguageItemText(kTesseractLanguages[i]);
+        const LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(i));
+        if (selectedCode == kTesseractLanguages[i].code) {
+            selected = static_cast<int>(index);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, selected, 0);
+}
+
 void FillInstalledOcrLanguages(HWND combo, SettingsDialogState& state) {
     state.ocrCodes.clear();
     state.ocrCodes.push_back(L"");
@@ -134,6 +174,17 @@ std::wstring SelectedOcrLanguageCode(HWND hwnd, const SettingsDialogState& state
     return state.ocrCodes[codeIndex];
 }
 
+void RefreshOcrLanguageCombo(HWND hwnd, SettingsDialogState& state) {
+    HWND combo = GetDlgItem(hwnd, kSettingsOcrCombo);
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    state.settings.ocrProvider = SelectedLanguageCode(hwnd, kSettingsProviderCombo);
+    if (state.settings.ocrProvider == L"tesseract") {
+        FillTesseractLanguages(combo, state);
+    } else {
+        FillInstalledOcrLanguages(combo, state);
+    }
+}
+
 LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     SettingsDialogState* state = reinterpret_cast<SettingsDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -151,35 +202,47 @@ LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPAR
         SendMessageW(targetCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         FillLanguageCombo(targetCombo, kTargetLanguages, std::size(kTargetLanguages), state->settings.targetLanguage);
 
-        CreateLabel(hwnd, L"Text in image", 20, 82, 340);
+        CreateLabel(hwnd, L"OCR engine", 20, 82, 340);
+        HWND providerCombo = CreateWindowW(L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                           20, 106, 340, 140, hwnd,
+                                           reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsProviderCombo)), nullptr, nullptr);
+        SendMessageW(providerCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
+        FillLanguageCombo(providerCombo, kOcrProviders, std::size(kOcrProviders), state->settings.ocrProvider);
+
+        CreateLabel(hwnd, L"Text in image", 20, 146, 340);
         HWND ocrCombo = CreateWindowW(L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                      20, 106, 340, 260, hwnd,
+                                      20, 170, 340, 260, hwnd,
                                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsOcrCombo)), nullptr, nullptr);
         SendMessageW(ocrCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
-        FillInstalledOcrLanguages(ocrCombo, *state);
+        RefreshOcrLanguageCombo(hwnd, *state);
 
         HWND check = CreateWindowW(L"BUTTON", L"Save local history", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                   20, 156, 250, 24, hwnd,
+                                   20, 220, 250, 24, hwnd,
                                    reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsHistoryCheck)), nullptr, nullptr);
         SendMessageW(check, BM_SETCHECK, state->settings.saveHistory ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
 
-        CreateLabel(hwnd, L"Only OCR languages installed in Windows are shown.", 20, 194, 340);
+        CreateLabel(hwnd, L"Tesseract needs third_party/tesseract/tessdata.", 20, 258, 340);
 
-        HWND save = CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 190, 230, 80, 30, hwnd,
+        HWND save = CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 190, 294, 80, 30, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsSave)), nullptr, nullptr);
-        HWND cancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 280, 230, 80, 30, hwnd,
+        HWND cancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 280, 294, 80, 30, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsCancel)), nullptr, nullptr);
         SendMessageW(save, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         SendMessageW(cancel, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         return 0;
     }
     case WM_COMMAND:
+        if (LOWORD(wparam) == kSettingsProviderCombo && HIWORD(wparam) == CBN_SELCHANGE && state) {
+            RefreshOcrLanguageCombo(hwnd, *state);
+            return 0;
+        }
         if (LOWORD(wparam) == kSettingsSave && state) {
             state->settings.targetLanguage = SelectedLanguageCode(hwnd, kSettingsTargetCombo);
             if (state->settings.targetLanguage.empty()) {
                 state->settings.targetLanguage = L"vi";
             }
+            state->settings.ocrProvider = SelectedLanguageCode(hwnd, kSettingsProviderCombo);
             state->settings.ocrLanguage = SelectedOcrLanguageCode(hwnd, *state);
             state->settings.saveHistory = SendDlgItemMessageW(hwnd, kSettingsHistoryCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
             state->saved = true;
@@ -208,7 +271,7 @@ std::optional<Settings> ShowSettingsDialog(HWND owner, Settings settings) {
 
     SettingsDialogState state{settings};
     HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW, kSettingsClass, L"JustDuck Settings",
-                                WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, 395, 315,
+                                WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, 395, 380,
                                 owner, nullptr, GetModuleHandleW(nullptr), &state);
     if (!hwnd) {
         return std::nullopt;
