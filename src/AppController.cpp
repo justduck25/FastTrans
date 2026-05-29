@@ -58,8 +58,8 @@ constexpr LanguageOption kTargetLanguages[] = {
 };
 
 constexpr LanguageOption kOcrProviders[] = {
-    {L"Windows OCR", L"windows"},
     {L"Bundled Tesseract", L"tesseract"},
+    {L"Windows OCR", L"windows"},
 };
 
 constexpr LanguageOption kTesseractLanguages[] = {
@@ -222,7 +222,7 @@ LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPAR
         SendMessageW(check, BM_SETCHECK, state->settings.saveHistory ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
 
-        CreateLabel(hwnd, L"Tesseract needs third_party/tesseract/tessdata.", 20, 258, 340);
+        CreateLabel(hwnd, L"Default: bundled Tesseract with auto language scoring.", 20, 258, 340);
 
         HWND save = CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 190, 294, 80, 30, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsSave)), nullptr, nullptr);
@@ -322,7 +322,10 @@ void AppController::TranslateFromScreen(HWND hwnd) {
         return;
     }
 
-    overlay_.ShowMessage(L"Reading text...", *region);
+    const std::wstring readingMessage = settings_.ocrProvider == L"tesseract"
+        ? L"Reading text with bundled Tesseract..."
+        : L"Reading text with Windows OCR...";
+    overlay_.ShowMessage(readingMessage, *region);
     OcrResult ocr = ocr_.Recognize(*captured, settings_);
     const std::wstring source = NormalizeOcrText(ocr.text);
     if (source.empty()) {
@@ -335,7 +338,7 @@ void AppController::TranslateFromScreen(HWND hwnd) {
         return;
     }
 
-    overlay_.ShowMessage(L"Translating...", *region);
+    overlay_.ShowMessage(L"Translating to Vietnamese...", *region);
     auto translated = translator_.Translate(source, settings_.targetLanguage);
     if (!translated) {
         overlay_.ShowMessage(L"Translation failed. Check your network connection or translation endpoint.", *region);

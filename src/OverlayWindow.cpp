@@ -60,9 +60,15 @@ void OverlayWindow::ShowMessage(const std::wstring& text, const RECT& anchor) {
     x = std::max(static_cast<int>(work.left + 8), x);
     y = std::max(static_cast<int>(work.top + 8), y);
 
+    const bool wasVisible = IsWindowVisible(hwnd) != FALSE;
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 14, 14);
     SetWindowRgn(hwnd, region, FALSE);
-    SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if (!wasVisible) {
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+        AnimateWindow(hwnd, 90, AW_BLEND);
+    } else {
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    }
     InvalidateRect(hwnd, nullptr, TRUE);
     UpdateWindow(hwnd);
 }
