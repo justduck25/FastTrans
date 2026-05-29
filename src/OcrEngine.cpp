@@ -213,29 +213,49 @@ std::string RemoveTesseractNoise(std::string text) {
 struct ProcessOutput {
     DWORD exitCode = 1;
     std::string output;
+    std::string error;
 };
 
 std::optional<ProcessOutput> RunProcessCaptureStdout(std::wstring commandLine) {
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     HANDLE readPipe = nullptr;
     HANDLE writePipe = nullptr;
+    wchar_t tempDirectory[MAX_PATH]{};
+    wchar_t errorPath[MAX_PATH]{};
     if (!CreatePipe(&readPipe, &writePipe, &security, 0)) {
         return std::nullopt;
     }
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    if (GetTempPathW(MAX_PATH, tempDirectory) == 0 ||
+        GetTempFileNameW(tempDirectory, L"jdt", 0, errorPath) == 0) {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return std::nullopt;
+    }
+
+    HANDLE errorFile = CreateFileW(errorPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, &security,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (errorFile == INVALID_HANDLE_VALUE) {
+        DeleteFileW(errorPath);
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return std::nullopt;
+    }
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     startup.hStdOutput = writePipe;
-    startup.hStdError = writePipe;
+    startup.hStdError = errorFile;
 
     PROCESS_INFORMATION process{};
     const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                                         nullptr, nullptr, &startup, &process);
     CloseHandle(writePipe);
     if (!created) {
+        CloseHandle(errorFile);
+        DeleteFileW(errorPath);
         CloseHandle(readPipe);
         return std::nullopt;
     }
@@ -252,6 +272,15 @@ std::optional<ProcessOutput> RunProcessCaptureStdout(std::wstring commandLine) {
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(readPipe);
+
+    SetFilePointer(errorFile, 0, nullptr, FILE_BEGIN);
+    char errorBuffer[4096]{};
+    DWORD errorRead = 0;
+    while (ReadFile(errorFile, errorBuffer, static_cast<DWORD>(sizeof(errorBuffer)), &errorRead, nullptr) && errorRead > 0) {
+        result.error.append(errorBuffer, errorBuffer + errorRead);
+    }
+    CloseHandle(errorFile);
+    DeleteFileW(errorPath);
 
     return result;
 }
@@ -299,7 +328,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
 
     const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
                                  L" stdout -l " + language + L" --tessdata-dir " +
-                                 Quote(tessdataDir) + L" --psm 6 --dpi 300";
+                                 Quote(tessdataDir) + L" --psm 6";
 
     auto processOutput = RunProcessCaptureStdout(command);
     DeleteFileW(imagePath->c_str());
@@ -309,7 +338,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
     }
     if (processOutput->exitCode != 0) {
         output.errorMessage = L"Bundled Tesseract failed.";
-        const std::wstring details = Trim(Utf8ToWide(processOutput->output));
+        const std::wstring details = Trim(Utf8ToWide(processOutput->error));
         if (!details.empty()) {
             output.errorMessage += L"\n\n" + details;
         }
