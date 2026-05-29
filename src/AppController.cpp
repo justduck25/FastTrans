@@ -1,5 +1,6 @@
 #include "AppController.h"
 
+#include "resource.h"
 #include "TextUtil.h"
 
 #include <shellapi.h>
@@ -28,13 +29,24 @@ constexpr COLORREF kSettingsAccent = RGB(32, 122, 218);
 constexpr COLORREF kSettingsBlue = RGB(64, 170, 255);
 constexpr COLORREF kSettingsPink = RGB(255, 115, 174);
 
+HICON LoadTrayIcon() {
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    HICON icon = reinterpret_cast<HICON>(
+        LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                   GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
+    if (!icon) {
+        icon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    }
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
+
 void AddTrayIcon(HWND hwnd) {
     NOTIFYICONDATAW nid{sizeof(nid)};
     nid.hWnd = hwnd;
     nid.uID = kTrayIconId;
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = kTrayMessage;
-    nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    nid.hIcon = LoadTrayIcon();
     wcscpy_s(nid.szTip, L"JustDuck Translator");
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
