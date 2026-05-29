@@ -13,13 +13,13 @@ constexpr int kMinWidth = 280;
 constexpr int kMaxWidth = 720;
 constexpr int kMaxHeight = 520;
 constexpr int kCloseButtonSize = 24;
-constexpr COLORREF kOverlayBg = RGB(255, 251, 253);
-constexpr COLORREF kOverlayBorder = RGB(248, 170, 198);
-constexpr COLORREF kOverlayTitle = RGB(210, 64, 132);
-constexpr COLORREF kOverlayText = RGB(42, 47, 62);
-constexpr COLORREF kOverlayMuted = RGB(128, 138, 152);
-constexpr COLORREF kMint = RGB(120, 225, 196);
-constexpr COLORREF kSun = RGB(255, 205, 111);
+constexpr COLORREF kOverlayBg = RGB(246, 251, 255);
+constexpr COLORREF kOverlayBorder = RGB(132, 190, 255);
+constexpr COLORREF kOverlayTitle = RGB(31, 118, 210);
+constexpr COLORREF kOverlayText = RGB(36, 49, 68);
+constexpr COLORREF kOverlayMuted = RGB(108, 125, 150);
+constexpr COLORREF kBlue = RGB(60, 170, 255);
+constexpr COLORREF kPink = RGB(255, 118, 174);
 
 HFONT CreateOverlayFont(int pointSize, int weight) {
     HDC screen = GetDC(nullptr);
@@ -193,14 +193,14 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     DeleteObject(border);
     DeleteObject(background);
 
-    HPEN accentPen = CreatePen(PS_SOLID, 4, kMint);
+    HPEN accentPen = CreatePen(PS_SOLID, 4, kBlue);
     HGDIOBJ oldAccentPen = SelectObject(dc, accentPen);
     MoveToEx(dc, 18, 1, nullptr);
     LineTo(dc, client.right - 18, 1);
     SelectObject(dc, oldAccentPen);
     DeleteObject(accentPen);
 
-    HBRUSH dotBrush = CreateSolidBrush(kSun);
+    HBRUSH dotBrush = CreateSolidBrush(kPink);
     HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
     HGDIOBJ oldDotPen = SelectObject(dc, GetStockObject(NULL_PEN));
     Ellipse(dc, 18, 18, 28, 28);

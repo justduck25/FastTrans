@@ -21,11 +21,12 @@ constexpr UINT kSettingsTargetCombo = 4003;
 constexpr UINT kSettingsHistoryCheck = 4004;
 constexpr UINT kSettingsOcrCombo = 4005;
 constexpr UINT kSettingsProviderCombo = 4006;
-constexpr COLORREF kSettingsBg = RGB(255, 250, 253);
-constexpr COLORREF kSettingsText = RGB(45, 48, 66);
-constexpr COLORREF kSettingsMuted = RGB(104, 113, 132);
-constexpr COLORREF kSettingsAccent = RGB(214, 71, 140);
-constexpr COLORREF kSettingsMint = RGB(101, 207, 184);
+constexpr COLORREF kSettingsBg = RGB(246, 251, 255);
+constexpr COLORREF kSettingsText = RGB(45, 54, 74);
+constexpr COLORREF kSettingsMuted = RGB(98, 116, 145);
+constexpr COLORREF kSettingsAccent = RGB(32, 122, 218);
+constexpr COLORREF kSettingsBlue = RGB(64, 170, 255);
+constexpr COLORREF kSettingsPink = RGB(255, 115, 174);
 
 void AddTrayIcon(HWND hwnd) {
     NOTIFYICONDATAW nid{sizeof(nid)};
@@ -267,14 +268,14 @@ LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPAR
         FillRect(dc, &client, bg);
         DeleteObject(bg);
 
-        HPEN accent = CreatePen(PS_SOLID, 4, kSettingsMint);
+        HPEN accent = CreatePen(PS_SOLID, 4, kSettingsBlue);
         HGDIOBJ oldPen = SelectObject(dc, accent);
         MoveToEx(dc, 22, 8, nullptr);
         LineTo(dc, client.right - 22, 8);
         SelectObject(dc, oldPen);
         DeleteObject(accent);
 
-        HBRUSH dot = CreateSolidBrush(RGB(255, 201, 111));
+        HBRUSH dot = CreateSolidBrush(kSettingsPink);
         HGDIOBJ oldBrush = SelectObject(dc, dot);
         HGDIOBJ oldNullPen = SelectObject(dc, GetStockObject(NULL_PEN));
         Ellipse(dc, client.right - 48, 28, client.right - 32, 44);
