@@ -67,6 +67,11 @@ void OverlayWindow::ShowMessage(const std::wstring& text, const RECT& anchor) {
     x = std::max(static_cast<int>(work.left + 8), x);
     y = std::max(static_cast<int>(work.top + 8), y);
 
+    if (hasManualPosition_) {
+        x = manualPosition_.x;
+        y = manualPosition_.y;
+    }
+
     const bool wasVisible = IsWindowVisible(hwnd) != FALSE;
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 14, 14);
     SetWindowRgn(hwnd, region, FALSE);
@@ -136,8 +141,21 @@ LRESULT CALLBACK OverlayWindow::WindowProc(HWND hwnd, UINT message, WPARAM wpara
             RECT closeRect = self->CloseButtonRect(hwnd);
             if (PtInRect(&closeRect, point)) {
                 self->Hide();
+            } else if (point.y <= kPaddingY + kTitleHeight) {
+                self->trackingManualMove_ = true;
+                ReleaseCapture();
+                SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
             }
             return 0;
+        }
+        break;
+    case WM_EXITSIZEMOVE:
+        if (self && self->trackingManualMove_) {
+            RECT windowRect{};
+            GetWindowRect(hwnd, &windowRect);
+            self->hasManualPosition_ = true;
+            self->trackingManualMove_ = false;
+            self->manualPosition_ = {windowRect.left, windowRect.top};
         }
         break;
     case WM_PAINT:

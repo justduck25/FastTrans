@@ -18,6 +18,9 @@ private:
 
     HWND hwnd_ = nullptr;
     std::wstring text_;
+    bool hasManualPosition_ = false;
+    bool trackingManualMove_ = false;
+    POINT manualPosition_{};
 };
 
 }  // namespace jd
