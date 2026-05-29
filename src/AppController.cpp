@@ -63,7 +63,7 @@ constexpr LanguageOption kOcrProviders[] = {
 };
 
 constexpr LanguageOption kTesseractLanguages[] = {
-    {L"Auto English + Vietnamese", L""},
+    {L"Auto from bundled language data", L""},
     {L"English", L"en-US"},
     {L"Vietnamese", L"vi-VN"},
     {L"Japanese", L"ja-JP"},

@@ -162,8 +162,21 @@ std::optional<std::wstring> WriteTempBmp(const std::vector<uint8_t>& bytes) {
     return bmpPath;
 }
 
+enum class OcrScript {
+    Latin,
+    Vietnamese,
+    Japanese,
+    Korean,
+    Chinese,
+    Cyrillic,
+    Thai,
+    Unknown,
+};
+
+int ScoreOcrResult(const OcrResult& result, OcrScript script);
+
 std::wstring TesseractLanguageFor(const std::wstring& language) {
-    if (language.empty()) return L"eng+vie";
+    if (language.empty()) return L"";
     if (language.rfind(L"en", 0) == 0) return L"eng";
     if (language.rfind(L"vi", 0) == 0) return L"vie";
     if (language.rfind(L"ja", 0) == 0) return L"jpn";
@@ -178,6 +191,63 @@ std::wstring TesseractLanguageFor(const std::wstring& language) {
     if (language.rfind(L"ru", 0) == 0) return L"rus";
     if (language.rfind(L"th", 0) == 0) return L"tha";
     return L"eng";
+}
+
+OcrScript ScriptForTesseractLanguage(std::wstring_view language) {
+    if (language == L"jpn") return OcrScript::Japanese;
+    if (language == L"kor") return OcrScript::Korean;
+    if (language == L"chi_sim" || language == L"chi_tra") return OcrScript::Chinese;
+    if (language == L"rus") return OcrScript::Cyrillic;
+    if (language == L"tha") return OcrScript::Thai;
+    if (language == L"vie") return OcrScript::Vietnamese;
+    return OcrScript::Latin;
+}
+
+std::vector<std::wstring> SplitTesseractLanguage(std::wstring_view language) {
+    std::vector<std::wstring> tokens;
+    size_t start = 0;
+    while (start <= language.size()) {
+        const size_t separator = language.find(L'+', start);
+        std::wstring token(language.substr(start, separator == std::wstring::npos ? std::wstring::npos : separator - start));
+        if (!token.empty()) {
+            tokens.push_back(token);
+        }
+        if (separator == std::wstring::npos) {
+            break;
+        }
+        start = separator + 1;
+    }
+    return tokens;
+}
+
+bool HasTesseractLanguageData(const std::wstring& tessdataDir, std::wstring_view language) {
+    for (const std::wstring& token : SplitTesseractLanguage(language)) {
+        if (!FileExists(tessdataDir + L"\\" + token + L".traineddata")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::wstring> AvailableTesseractLanguages(const std::wstring& tessdataDir) {
+    std::vector<std::wstring> languages;
+    WIN32_FIND_DATAW data{};
+    HANDLE find = FindFirstFileW((tessdataDir + L"\\*.traineddata").c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+        return languages;
+    }
+
+    do {
+        std::wstring file = data.cFileName;
+        const std::wstring suffix = L".traineddata";
+        if (file.size() > suffix.size() && file.substr(file.size() - suffix.size()) == suffix) {
+            file.resize(file.size() - suffix.size());
+            languages.push_back(file);
+        }
+    } while (FindNextFileW(find, &data));
+
+    FindClose(find);
+    return languages;
 }
 
 std::string RemoveTesseractNoise(std::string text) {
@@ -307,47 +377,57 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
         return output;
     }
 
-    const std::wstring language = TesseractLanguageFor(settings.ocrLanguage);
-    size_t languageStart = 0;
-    while (languageStart <= language.size()) {
-        const size_t separator = language.find(L'+', languageStart);
-        const std::wstring token = language.substr(languageStart, separator == std::wstring::npos ? std::wstring::npos : separator - languageStart);
-        if (!token.empty()) {
-            const std::wstring trainedData = tessdataDir + L"\\" + token + L".traineddata";
-            if (!FileExists(trainedData)) {
-                output.errorMessage = L"Bundled Tesseract language data not found.\n\nMissing:\n" + trainedData;
-                DeleteFileW(imagePath->c_str());
-                return output;
-            }
-        }
-        if (separator == std::wstring::npos) {
-            break;
-        }
-        languageStart = separator + 1;
+    std::vector<std::wstring> languages;
+    const std::wstring configuredLanguage = TesseractLanguageFor(settings.ocrLanguage);
+    if (configuredLanguage.empty()) {
+        languages = AvailableTesseractLanguages(tessdataDir);
+    } else {
+        languages.push_back(configuredLanguage);
     }
 
-    const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
-                                 L" stdout -l " + language + L" --tessdata-dir " +
-                                 Quote(tessdataDir) + L" --psm 6";
+    if (languages.empty()) {
+        output.errorMessage = L"Bundled Tesseract has no language data files.\n\nExpected *.traineddata in:\n" + tessdataDir;
+        DeleteFileW(imagePath->c_str());
+        return output;
+    }
 
-    auto processOutput = RunProcessCaptureStdout(command);
+    int bestScore = -1;
+    std::wstring lastError;
+    for (const std::wstring& language : languages) {
+        if (!HasTesseractLanguageData(tessdataDir, language)) {
+            lastError = L"Missing language data for " + language;
+            continue;
+        }
+
+        const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
+                                     L" stdout -l " + language + L" --tessdata-dir " +
+                                     Quote(tessdataDir) + L" --psm 6";
+
+        auto processOutput = RunProcessCaptureStdout(command);
+        if (!processOutput) {
+            lastError = L"Bundled Tesseract could not start.";
+            continue;
+        }
+        if (processOutput->exitCode != 0) {
+            lastError = Trim(Utf8ToWide(processOutput->error));
+            continue;
+        }
+
+        OcrResult candidate;
+        candidate.text = Trim(Utf8ToWide(RemoveTesseractNoise(processOutput->output)));
+        const int score = ScoreOcrResult(candidate, ScriptForTesseractLanguage(language));
+        if (!candidate.text.empty() && score > bestScore) {
+            bestScore = score;
+            output = std::move(candidate);
+        }
+    }
+
     DeleteFileW(imagePath->c_str());
-    if (!processOutput) {
-        output.errorMessage = L"Bundled Tesseract could not start.";
-        return output;
-    }
-    if (processOutput->exitCode != 0) {
-        output.errorMessage = L"Bundled Tesseract failed.";
-        const std::wstring details = Trim(Utf8ToWide(processOutput->error));
-        if (!details.empty()) {
-            output.errorMessage += L"\n\n" + details;
-        }
-        return output;
-    }
-
-    output.text = Trim(Utf8ToWide(RemoveTesseractNoise(processOutput->output)));
     if (output.text.empty()) {
         output.errorMessage = L"Bundled Tesseract ran, but did not find text.";
+        if (!lastError.empty()) {
+            output.errorMessage += L"\n\n" + lastError;
+        }
     }
     return output;
 }
@@ -465,17 +545,6 @@ OcrResult BuildResult(const winrt::Windows::Media::Ocr::OcrResult& result) {
 
     return output;
 }
-
-enum class OcrScript {
-    Latin,
-    Vietnamese,
-    Japanese,
-    Korean,
-    Chinese,
-    Cyrillic,
-    Thai,
-    Unknown,
-};
 
 struct CandidateOcrEngine {
     std::wstring tag;

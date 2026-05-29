@@ -64,6 +64,7 @@ void OverlayWindow::ShowMessage(const std::wstring& text, const RECT& anchor) {
     SetWindowRgn(hwnd, region, FALSE);
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     InvalidateRect(hwnd, nullptr, TRUE);
+    UpdateWindow(hwnd);
 }
 
 void OverlayWindow::Hide() {
