@@ -13,6 +13,13 @@ constexpr int kMinWidth = 280;
 constexpr int kMaxWidth = 720;
 constexpr int kMaxHeight = 520;
 constexpr int kCloseButtonSize = 24;
+constexpr COLORREF kOverlayBg = RGB(255, 251, 253);
+constexpr COLORREF kOverlayBorder = RGB(248, 170, 198);
+constexpr COLORREF kOverlayTitle = RGB(210, 64, 132);
+constexpr COLORREF kOverlayText = RGB(42, 47, 62);
+constexpr COLORREF kOverlayMuted = RGB(128, 138, 152);
+constexpr COLORREF kMint = RGB(120, 225, 196);
+constexpr COLORREF kSun = RGB(255, 205, 111);
 
 HFONT CreateOverlayFont(int pointSize, int weight) {
     HDC screen = GetDC(nullptr);
@@ -176,8 +183,8 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     RECT client{};
     GetClientRect(hwnd, &client);
 
-    HBRUSH background = CreateSolidBrush(RGB(18, 20, 24));
-    HPEN border = CreatePen(PS_SOLID, 1, RGB(76, 82, 94));
+    HBRUSH background = CreateSolidBrush(kOverlayBg);
+    HPEN border = CreatePen(PS_SOLID, 1, kOverlayBorder);
     HGDIOBJ oldBrush = SelectObject(dc, background);
     HGDIOBJ oldPen = SelectObject(dc, border);
     RoundRect(dc, client.left, client.top, client.right, client.bottom, 14, 14);
@@ -186,18 +193,33 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     DeleteObject(border);
     DeleteObject(background);
 
+    HPEN accentPen = CreatePen(PS_SOLID, 4, kMint);
+    HGDIOBJ oldAccentPen = SelectObject(dc, accentPen);
+    MoveToEx(dc, 18, 1, nullptr);
+    LineTo(dc, client.right - 18, 1);
+    SelectObject(dc, oldAccentPen);
+    DeleteObject(accentPen);
+
+    HBRUSH dotBrush = CreateSolidBrush(kSun);
+    HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
+    HGDIOBJ oldDotPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, 18, 18, 28, 28);
+    SelectObject(dc, oldDotPen);
+    SelectObject(dc, oldDotBrush);
+    DeleteObject(dotBrush);
+
     SetBkMode(dc, TRANSPARENT);
 
     HFONT titleFont = CreateOverlayFont(9, FW_SEMIBOLD);
     HGDIOBJ oldFont = SelectObject(dc, titleFont);
-    SetTextColor(dc, RGB(142, 229, 181));
-    RECT titleRect{kPaddingX, kPaddingY - 2, client.right - kPaddingX, kPaddingY + kTitleHeight};
+    SetTextColor(dc, kOverlayTitle);
+    RECT titleRect{kPaddingX + 18, kPaddingY - 2, client.right - kPaddingX, kPaddingY + kTitleHeight};
     DrawTextW(dc, L"Translation", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, oldFont);
     DeleteObject(titleFont);
 
     RECT closeRect = CloseButtonRect(hwnd);
-    HPEN closePen = CreatePen(PS_SOLID, 2, RGB(178, 185, 196));
+    HPEN closePen = CreatePen(PS_SOLID, 2, kOverlayMuted);
     HGDIOBJ oldClosePen = SelectObject(dc, closePen);
     MoveToEx(dc, closeRect.left + 7, closeRect.top + 7, nullptr);
     LineTo(dc, closeRect.right - 7, closeRect.bottom - 7);
@@ -206,7 +228,7 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     SelectObject(dc, oldClosePen);
     DeleteObject(closePen);
 
-    SetTextColor(dc, RGB(245, 247, 250));
+    SetTextColor(dc, kOverlayText);
 
     HFONT font = CreateOverlayFont(12, FW_NORMAL);
     oldFont = SelectObject(dc, font);
