@@ -1,0 +1,19 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="112" x2="884" y2="912" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1FB6FF"/>
+      <stop offset="0.52" stop-color="#41D1FF"/>
+      <stop offset="1" stop-color="#FF5DB8"/>
+    </linearGradient>
+    <linearGradient id="card" x1="246" y1="276" x2="788" y2="762" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F8FBFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="224" fill="url(#bg)"/>
+  <path d="M298 282H680C738.542 282 786 329.458 786 388V608C786 666.542 738.542 714 680 714H486L366 812V714H298C239.458 714 192 666.542 192 608V388C192 329.458 239.458 282 298 282Z" fill="url(#card)"/>
+  <path d="M360 404H494M427 404V606M344 606H510" stroke="#0D2337" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M598 408H704M652 408C646 499 606 573 558 606M612 502H740M704 502C684 558 644 614 582 650" stroke="#FF4FA8" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="740" cy="314" r="54" fill="#0D2337"/>
+  <circle cx="760" cy="292" r="16" fill="#FFFFFF" opacity="0.92"/>
+</svg>

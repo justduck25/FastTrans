@@ -1,5 +1,6 @@
 #include "AppController.h"
 
+#include "resource.h"
 #include "TextUtil.h"
 
 #include <shellapi.h>
@@ -20,6 +21,24 @@ constexpr UINT kSettingsCancel = 4002;
 constexpr UINT kSettingsTargetCombo = 4003;
 constexpr UINT kSettingsHistoryCheck = 4004;
 constexpr UINT kSettingsOcrCombo = 4005;
+constexpr UINT kSettingsProviderCombo = 4006;
+constexpr COLORREF kSettingsBg = RGB(246, 251, 255);
+constexpr COLORREF kSettingsText = RGB(45, 54, 74);
+constexpr COLORREF kSettingsMuted = RGB(98, 116, 145);
+constexpr COLORREF kSettingsAccent = RGB(32, 122, 218);
+constexpr COLORREF kSettingsBlue = RGB(64, 170, 255);
+constexpr COLORREF kSettingsPink = RGB(255, 115, 174);
+
+HICON LoadTrayIcon() {
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    HICON icon = reinterpret_cast<HICON>(
+        LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                   GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
+    if (!icon) {
+        icon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    }
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
 
 void AddTrayIcon(HWND hwnd) {
     NOTIFYICONDATAW nid{sizeof(nid)};
@@ -27,7 +46,7 @@ void AddTrayIcon(HWND hwnd) {
     nid.uID = kTrayIconId;
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = kTrayMessage;
-    nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    nid.hIcon = LoadTrayIcon();
     wcscpy_s(nid.szTip, L"JustDuck Translator");
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
@@ -42,6 +61,8 @@ void RemoveTrayIcon(HWND hwnd) {
 struct SettingsDialogState {
     Settings settings;
     std::vector<std::wstring> ocrCodes;
+    HBRUSH backgroundBrush = nullptr;
+    HFONT titleFont = nullptr;
     bool saved = false;
 };
 
@@ -56,12 +77,43 @@ constexpr LanguageOption kTargetLanguages[] = {
     {L"Vietnamese", L"vi"},
 };
 
+constexpr LanguageOption kOcrProviders[] = {
+    {L"Bundled Tesseract", L"tesseract"},
+    {L"Windows OCR", L"windows"},
+};
+
+constexpr LanguageOption kTesseractLanguages[] = {
+    {L"Auto from bundled language data", L""},
+    {L"English", L"en-US"},
+    {L"Vietnamese", L"vi-VN"},
+    {L"Japanese", L"ja-JP"},
+    {L"Korean", L"ko-KR"},
+    {L"Chinese Simplified", L"zh-Hans"},
+    {L"Chinese Traditional", L"zh-Hant"},
+    {L"French", L"fr-FR"},
+    {L"German", L"de-DE"},
+    {L"Spanish", L"es-ES"},
+    {L"Italian", L"it-IT"},
+    {L"Portuguese", L"pt-BR"},
+    {L"Russian", L"ru-RU"},
+    {L"Thai", L"th-TH"},
+};
+
 HFONT DialogFont() {
     return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 }
 
-HWND CreateLabel(HWND hwnd, const wchar_t* text, int x, int y, int width) {
-    HWND label = CreateWindowW(L"STATIC", text, WS_CHILD | WS_VISIBLE, x, y, width, 22, hwnd, nullptr, nullptr, nullptr);
+HFONT CreateDialogFont(int pointSize, int weight) {
+    HDC screen = GetDC(nullptr);
+    const int logicalHeight = -MulDiv(pointSize, GetDeviceCaps(screen, LOGPIXELSY), 72);
+    ReleaseDC(nullptr, screen);
+    return CreateFontW(logicalHeight, 0, 0, 0, weight, FALSE, FALSE, FALSE, VIETNAMESE_CHARSET,
+                       OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_NATURAL_QUALITY,
+                       VARIABLE_PITCH | FF_SWISS, L"Segoe UI");
+}
+
+HWND CreateLabel(HWND hwnd, const wchar_t* text, int x, int y, int width, int height = 22) {
+    HWND label = CreateWindowW(L"STATIC", text, WS_CHILD | WS_VISIBLE, x, y, width, height, hwnd, nullptr, nullptr, nullptr);
     SendMessageW(label, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
     return label;
 }
@@ -95,6 +147,23 @@ std::wstring SelectedLanguageCode(HWND hwnd, UINT controlId) {
     }
     auto code = reinterpret_cast<const wchar_t*>(SendMessageW(combo, CB_GETITEMDATA, index, 0));
     return code ? std::wstring(code) : std::wstring();
+}
+
+void FillTesseractLanguages(HWND combo, SettingsDialogState& state) {
+    state.ocrCodes.clear();
+    int selected = 0;
+    const std::wstring selectedCode = Trim(state.settings.ocrLanguage);
+
+    for (size_t i = 0; i < std::size(kTesseractLanguages); ++i) {
+        state.ocrCodes.push_back(kTesseractLanguages[i].code);
+        const std::wstring text = LanguageItemText(kTesseractLanguages[i]);
+        const LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(i));
+        if (selectedCode == kTesseractLanguages[i].code) {
+            selected = static_cast<int>(index);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, selected, 0);
 }
 
 void FillInstalledOcrLanguages(HWND combo, SettingsDialogState& state) {
@@ -134,6 +203,17 @@ std::wstring SelectedOcrLanguageCode(HWND hwnd, const SettingsDialogState& state
     return state.ocrCodes[codeIndex];
 }
 
+void RefreshOcrLanguageCombo(HWND hwnd, SettingsDialogState& state) {
+    HWND combo = GetDlgItem(hwnd, kSettingsOcrCombo);
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    state.settings.ocrProvider = SelectedLanguageCode(hwnd, kSettingsProviderCombo);
+    if (state.settings.ocrProvider == L"tesseract") {
+        FillTesseractLanguages(combo, state);
+    } else {
+        FillInstalledOcrLanguages(combo, state);
+    }
+}
+
 LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     SettingsDialogState* state = reinterpret_cast<SettingsDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -144,42 +224,91 @@ LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPAR
 
     switch (message) {
     case WM_CREATE: {
-        CreateLabel(hwnd, L"Translate to", 20, 18, 340);
+        if (state) {
+            state->backgroundBrush = CreateSolidBrush(kSettingsBg);
+        }
+
+        state->titleFont = CreateDialogFont(14, FW_SEMIBOLD);
+        HWND title = CreateLabel(hwnd, L"FastTrans Settings", 22, 18, 340, 26);
+        SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(state->titleFont), TRUE);
+        SetPropW(title, L"TitleLabel", reinterpret_cast<HANDLE>(1));
+        CreateLabel(hwnd, L"Choose how text is read before it becomes Vietnamese.", 22, 46, 340, 22);
+
+        CreateLabel(hwnd, L"Translate to", 22, 86, 340);
         HWND targetCombo = CreateWindowW(L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                         20, 42, 340, 180, hwnd,
+                                         22, 110, 340, 180, hwnd,
                                          reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsTargetCombo)), nullptr, nullptr);
         SendMessageW(targetCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         FillLanguageCombo(targetCombo, kTargetLanguages, std::size(kTargetLanguages), state->settings.targetLanguage);
 
-        CreateLabel(hwnd, L"Text in image", 20, 82, 340);
+        CreateLabel(hwnd, L"OCR engine", 22, 150, 340);
+        HWND providerCombo = CreateWindowW(L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                           22, 174, 340, 140, hwnd,
+                                           reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsProviderCombo)), nullptr, nullptr);
+        SendMessageW(providerCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
+        FillLanguageCombo(providerCombo, kOcrProviders, std::size(kOcrProviders), state->settings.ocrProvider);
+
+        CreateLabel(hwnd, L"Text language", 22, 214, 340);
         HWND ocrCombo = CreateWindowW(L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                      20, 106, 340, 260, hwnd,
+                                      22, 238, 340, 260, hwnd,
                                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsOcrCombo)), nullptr, nullptr);
         SendMessageW(ocrCombo, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
-        FillInstalledOcrLanguages(ocrCombo, *state);
+        RefreshOcrLanguageCombo(hwnd, *state);
 
         HWND check = CreateWindowW(L"BUTTON", L"Save local history", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                   20, 156, 250, 24, hwnd,
+                                   22, 288, 250, 24, hwnd,
                                    reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsHistoryCheck)), nullptr, nullptr);
         SendMessageW(check, BM_SETCHECK, state->settings.saveHistory ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
 
-        CreateLabel(hwnd, L"Only OCR languages installed in Windows are shown.", 20, 194, 340);
+        CreateLabel(hwnd, L"Default uses bundled OCR with auto language scoring.", 22, 324, 340);
 
-        HWND save = CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 190, 230, 80, 30, hwnd,
+        HWND save = CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 192, 358, 80, 30, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsSave)), nullptr, nullptr);
-        HWND cancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 280, 230, 80, 30, hwnd,
+        HWND cancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 282, 358, 80, 30, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsCancel)), nullptr, nullptr);
         SendMessageW(save, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         SendMessageW(cancel, WM_SETFONT, reinterpret_cast<WPARAM>(DialogFont()), TRUE);
         return 0;
     }
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        HBRUSH bg = CreateSolidBrush(kSettingsBg);
+        FillRect(dc, &client, bg);
+        DeleteObject(bg);
+
+        HPEN accent = CreatePen(PS_SOLID, 4, kSettingsBlue);
+        HGDIOBJ oldPen = SelectObject(dc, accent);
+        MoveToEx(dc, 22, 8, nullptr);
+        LineTo(dc, client.right - 22, 8);
+        SelectObject(dc, oldPen);
+        DeleteObject(accent);
+
+        HBRUSH dot = CreateSolidBrush(kSettingsPink);
+        HGDIOBJ oldBrush = SelectObject(dc, dot);
+        HGDIOBJ oldNullPen = SelectObject(dc, GetStockObject(NULL_PEN));
+        Ellipse(dc, client.right - 48, 28, client.right - 32, 44);
+        SelectObject(dc, oldNullPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(dot);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_COMMAND:
+        if (LOWORD(wparam) == kSettingsProviderCombo && HIWORD(wparam) == CBN_SELCHANGE && state) {
+            RefreshOcrLanguageCombo(hwnd, *state);
+            return 0;
+        }
         if (LOWORD(wparam) == kSettingsSave && state) {
             state->settings.targetLanguage = SelectedLanguageCode(hwnd, kSettingsTargetCombo);
             if (state->settings.targetLanguage.empty()) {
                 state->settings.targetLanguage = L"vi";
             }
+            state->settings.ocrProvider = SelectedLanguageCode(hwnd, kSettingsProviderCombo);
             state->settings.ocrLanguage = SelectedOcrLanguageCode(hwnd, *state);
             state->settings.saveHistory = SendDlgItemMessageW(hwnd, kSettingsHistoryCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
             state->saved = true;
@@ -194,6 +323,35 @@ LRESULT CALLBACK SettingsWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPAR
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
+    case WM_CTLCOLORDLG:
+        if (state && state->backgroundBrush) {
+            return reinterpret_cast<LRESULT>(state->backgroundBrush);
+        }
+        break;
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = reinterpret_cast<HDC>(wparam);
+        SetBkMode(dc, TRANSPARENT);
+        HWND control = reinterpret_cast<HWND>(lparam);
+        if (GetPropW(control, L"TitleLabel")) {
+            SetTextColor(dc, kSettingsAccent);
+        } else {
+            SetTextColor(dc, kSettingsMuted);
+        }
+        if (state && state->backgroundBrush) {
+            return reinterpret_cast<LRESULT>(state->backgroundBrush);
+        }
+        break;
+    }
+    case WM_DESTROY:
+        if (state && state->backgroundBrush) {
+            DeleteObject(state->backgroundBrush);
+            state->backgroundBrush = nullptr;
+        }
+        if (state && state->titleFont) {
+            DeleteObject(state->titleFont);
+            state->titleFont = nullptr;
+        }
+        break;
     }
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
@@ -208,7 +366,7 @@ std::optional<Settings> ShowSettingsDialog(HWND owner, Settings settings) {
 
     SettingsDialogState state{settings};
     HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW, kSettingsClass, L"JustDuck Settings",
-                                WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, 395, 315,
+                                WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, 405, 450,
                                 owner, nullptr, GetModuleHandleW(nullptr), &state);
     if (!hwnd) {
         return std::nullopt;
@@ -263,7 +421,7 @@ void AppController::TranslateFromScreen(HWND hwnd) {
     OcrResult ocr = ocr_.Recognize(*captured, settings_);
     const std::wstring source = NormalizeOcrText(ocr.text);
     if (source.empty()) {
-        overlay_.ShowMessage(L"No text found.", *region);
+        overlay_.ShowMessage(ocr.errorMessage.empty() ? L"No text found." : ocr.errorMessage, *region);
         return;
     }
 

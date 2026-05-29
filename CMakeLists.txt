@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(JustDuckTranslator LANGUAGES CXX)
 
 add_executable(JustDuckTranslator WIN32
+    src/app.rc
     src/AppController.cpp
     src/CaptureManager.cpp
     src/HotkeyManager.cpp

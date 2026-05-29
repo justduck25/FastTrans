@@ -1,6 +1,7 @@
 build/
 *.obj
 *.exe
+!third_party/tesseract/tesseract.exe
 *.pdb
 *.ilk
 *.idb

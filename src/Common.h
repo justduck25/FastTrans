@@ -19,6 +19,7 @@ constexpr UINT kTrayMessage = WM_APP + 1;
 
 struct Settings {
     std::wstring targetLanguage = L"vi";
+    std::wstring ocrProvider = L"tesseract";
     std::wstring ocrLanguage;
     bool saveHistory = false;
 };
@@ -30,6 +31,7 @@ struct TextBox {
 
 struct OcrResult {
     std::wstring text;
+    std::wstring errorMessage;
     std::vector<TextBox> lines;
     std::vector<TextBox> words;
 };

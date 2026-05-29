@@ -13,6 +13,13 @@ constexpr int kMinWidth = 280;
 constexpr int kMaxWidth = 720;
 constexpr int kMaxHeight = 520;
 constexpr int kCloseButtonSize = 24;
+constexpr COLORREF kOverlayBg = RGB(246, 251, 255);
+constexpr COLORREF kOverlayBorder = RGB(132, 190, 255);
+constexpr COLORREF kOverlayTitle = RGB(31, 118, 210);
+constexpr COLORREF kOverlayText = RGB(36, 49, 68);
+constexpr COLORREF kOverlayMuted = RGB(108, 125, 150);
+constexpr COLORREF kBlue = RGB(60, 170, 255);
+constexpr COLORREF kPink = RGB(255, 118, 174);
 
 HFONT CreateOverlayFont(int pointSize, int weight) {
     HDC screen = GetDC(nullptr);
@@ -60,10 +67,22 @@ void OverlayWindow::ShowMessage(const std::wstring& text, const RECT& anchor) {
     x = std::max(static_cast<int>(work.left + 8), x);
     y = std::max(static_cast<int>(work.top + 8), y);
 
+    if (hasManualPosition_) {
+        x = manualPosition_.x;
+        y = manualPosition_.y;
+    }
+
+    const bool wasVisible = IsWindowVisible(hwnd) != FALSE;
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 14, 14);
     SetWindowRgn(hwnd, region, FALSE);
-    SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if (!wasVisible) {
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+        AnimateWindow(hwnd, 90, AW_BLEND);
+    } else {
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    }
     InvalidateRect(hwnd, nullptr, TRUE);
+    UpdateWindow(hwnd);
 }
 
 void OverlayWindow::Hide() {
@@ -122,8 +141,21 @@ LRESULT CALLBACK OverlayWindow::WindowProc(HWND hwnd, UINT message, WPARAM wpara
             RECT closeRect = self->CloseButtonRect(hwnd);
             if (PtInRect(&closeRect, point)) {
                 self->Hide();
+            } else if (point.y <= kPaddingY + kTitleHeight) {
+                self->trackingManualMove_ = true;
+                ReleaseCapture();
+                SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
             }
             return 0;
+        }
+        break;
+    case WM_EXITSIZEMOVE:
+        if (self && self->trackingManualMove_) {
+            RECT windowRect{};
+            GetWindowRect(hwnd, &windowRect);
+            self->hasManualPosition_ = true;
+            self->trackingManualMove_ = false;
+            self->manualPosition_ = {windowRect.left, windowRect.top};
         }
         break;
     case WM_PAINT:
@@ -169,8 +201,8 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     RECT client{};
     GetClientRect(hwnd, &client);
 
-    HBRUSH background = CreateSolidBrush(RGB(18, 20, 24));
-    HPEN border = CreatePen(PS_SOLID, 1, RGB(76, 82, 94));
+    HBRUSH background = CreateSolidBrush(kOverlayBg);
+    HPEN border = CreatePen(PS_SOLID, 1, kOverlayBorder);
     HGDIOBJ oldBrush = SelectObject(dc, background);
     HGDIOBJ oldPen = SelectObject(dc, border);
     RoundRect(dc, client.left, client.top, client.right, client.bottom, 14, 14);
@@ -179,18 +211,33 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     DeleteObject(border);
     DeleteObject(background);
 
+    HPEN accentPen = CreatePen(PS_SOLID, 4, kBlue);
+    HGDIOBJ oldAccentPen = SelectObject(dc, accentPen);
+    MoveToEx(dc, 18, 1, nullptr);
+    LineTo(dc, client.right - 18, 1);
+    SelectObject(dc, oldAccentPen);
+    DeleteObject(accentPen);
+
+    HBRUSH dotBrush = CreateSolidBrush(kPink);
+    HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
+    HGDIOBJ oldDotPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, 18, 18, 28, 28);
+    SelectObject(dc, oldDotPen);
+    SelectObject(dc, oldDotBrush);
+    DeleteObject(dotBrush);
+
     SetBkMode(dc, TRANSPARENT);
 
     HFONT titleFont = CreateOverlayFont(9, FW_SEMIBOLD);
     HGDIOBJ oldFont = SelectObject(dc, titleFont);
-    SetTextColor(dc, RGB(142, 229, 181));
-    RECT titleRect{kPaddingX, kPaddingY - 2, client.right - kPaddingX, kPaddingY + kTitleHeight};
+    SetTextColor(dc, kOverlayTitle);
+    RECT titleRect{kPaddingX + 18, kPaddingY - 2, client.right - kPaddingX, kPaddingY + kTitleHeight};
     DrawTextW(dc, L"Translation", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, oldFont);
     DeleteObject(titleFont);
 
     RECT closeRect = CloseButtonRect(hwnd);
-    HPEN closePen = CreatePen(PS_SOLID, 2, RGB(178, 185, 196));
+    HPEN closePen = CreatePen(PS_SOLID, 2, kOverlayMuted);
     HGDIOBJ oldClosePen = SelectObject(dc, closePen);
     MoveToEx(dc, closeRect.left + 7, closeRect.top + 7, nullptr);
     LineTo(dc, closeRect.right - 7, closeRect.bottom - 7);
@@ -199,7 +246,7 @@ void OverlayWindow::LayoutAndPaint(HWND hwnd, HDC dc) {
     SelectObject(dc, oldClosePen);
     DeleteObject(closePen);
 
-    SetTextColor(dc, RGB(245, 247, 250));
+    SetTextColor(dc, kOverlayText);
 
     HFONT font = CreateOverlayFont(12, FW_NORMAL);
     oldFont = SelectObject(dc, font);

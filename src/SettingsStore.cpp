@@ -32,6 +32,7 @@ SettingsStore::SettingsStore() {
 Settings SettingsStore::Load() const {
     Settings settings;
     settings.targetLanguage = ReadIniString(path_, L"Translation", L"TargetLanguage", L"vi");
+    settings.ocrProvider = ReadIniString(path_, L"OCR", L"Provider", L"tesseract");
     settings.ocrLanguage = ReadIniString(path_, L"OCR", L"Language", L"");
     settings.saveHistory = GetPrivateProfileIntW(L"Privacy", L"SaveHistory", 0, path_.c_str()) != 0;
     return settings;
@@ -39,6 +40,7 @@ Settings SettingsStore::Load() const {
 
 void SettingsStore::Save(const Settings& settings) const {
     WritePrivateProfileStringW(L"Translation", L"TargetLanguage", settings.targetLanguage.c_str(), path_.c_str());
+    WritePrivateProfileStringW(L"OCR", L"Provider", settings.ocrProvider.c_str(), path_.c_str());
     WritePrivateProfileStringW(L"OCR", L"Language", settings.ocrLanguage.c_str(), path_.c_str());
     WritePrivateProfileStringW(L"Privacy", L"SaveHistory", settings.saveHistory ? L"1" : L"0", path_.c_str());
 }

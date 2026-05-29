@@ -1,5 +1,7 @@
 #include "AppController.h"
 
+#include "resource.h"
+
 #include <winrt/base.h>
 
 namespace {
@@ -70,6 +72,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     WNDCLASSW wc{};
     wc.lpfnWndProc = MainWindowProc;
     wc.hInstance = instance;
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     wc.lpszClassName = kMainWindowClass;
     RegisterClassW(&wc);
 

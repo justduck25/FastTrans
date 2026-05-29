@@ -8,6 +8,7 @@ Windows-first C++ desktop MVP for hover/region translation.
 - Fullscreen drag-to-select region picker.
 - GDI screen capture for the selected rectangle.
 - Local Windows OCR through `Windows.Media.Ocr`.
+- Optional bundled Tesseract OCR provider.
 - Translation request through `translate.googleapis.com`.
 - Always-on-top overlay near the selected region.
 - Local settings file for target language.
@@ -35,6 +36,33 @@ This workspace was also verified with a direct MSVC build, producing:
 ```
 
 The app starts in the tray. Press `Ctrl + Shift + T`, drag a screen region, and release.
+
+## Bundled Tesseract OCR
+
+To use the bundled OCR provider, place the runtime here:
+
+```text
+third_party/tesseract/tesseract.exe
+third_party/tesseract/tessdata/
+```
+
+Common `tessdata` files:
+
+```text
+eng.traineddata
+vie.traineddata
+jpn.traineddata
+kor.traineddata
+chi_sim.traineddata
+chi_tra.traineddata
+fra.traineddata
+deu.traineddata
+spa.traineddata
+rus.traineddata
+tha.traineddata
+```
+
+In Settings, choose `Bundled Tesseract`, then choose the OCR language for the image. Translation output still targets Vietnamese.
 
 ## Notes
 

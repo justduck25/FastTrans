@@ -1,5 +1,7 @@
 #include "OcrEngine.h"
 
+#include "TextUtil.h"
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.h>
@@ -53,6 +55,381 @@ std::vector<uint8_t> HBitmapToBmpBytes(HBITMAP bitmap, SIZE size) {
     offset += sizeof(info);
     std::memcpy(bytes.data() + offset, pixels.data(), pixels.size());
     return bytes;
+}
+
+std::wstring ModuleDirectory() {
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    std::wstring directory = path;
+    const size_t slash = directory.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        directory.resize(slash);
+    }
+    return directory;
+}
+
+std::wstring Quote(std::wstring_view value) {
+    std::wstring quoted = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'"') {
+            quoted += L"\\\"";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted += L"\"";
+    return quoted;
+}
+
+bool FileExists(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+bool DirectoryExists(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+std::wstring ParentDirectory(std::wstring path) {
+    const size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        path.resize(slash);
+    }
+    return path;
+}
+
+struct TesseractRuntime {
+    std::wstring executable;
+    std::wstring tessdata;
+};
+
+std::optional<TesseractRuntime> FindBundledTesseractRuntime() {
+    const std::wstring moduleDir = ModuleDirectory();
+    const std::wstring exeRelative = L"\\third_party\\tesseract\\tesseract.exe";
+    const std::wstring dataRelative = L"\\third_party\\tesseract\\tessdata";
+
+    std::vector<std::wstring> bases;
+    bases.push_back(moduleDir);
+    bases.push_back(ParentDirectory(moduleDir));
+    bases.push_back(ParentDirectory(ParentDirectory(moduleDir)));
+
+    for (const std::wstring& base : bases) {
+        TesseractRuntime runtime{base + exeRelative, base + dataRelative};
+        if (FileExists(runtime.executable) && DirectoryExists(runtime.tessdata)) {
+            return runtime;
+        }
+    }
+    return std::nullopt;
+}
+
+std::wstring TesseractSearchHint() {
+    const std::wstring moduleDir = ModuleDirectory();
+    const std::wstring rootDir = ParentDirectory(ParentDirectory(moduleDir));
+    return L"Searched:\n" +
+           moduleDir + L"\\third_party\\tesseract\n" +
+           rootDir + L"\\third_party\\tesseract";
+}
+
+std::optional<std::wstring> WriteTempBmp(const std::vector<uint8_t>& bytes) {
+    wchar_t tempDirectory[MAX_PATH]{};
+    if (GetTempPathW(MAX_PATH, tempDirectory) == 0) {
+        return std::nullopt;
+    }
+
+    wchar_t tempPath[MAX_PATH]{};
+    if (GetTempFileNameW(tempDirectory, L"jdt", 0, tempPath) == 0) {
+        return std::nullopt;
+    }
+
+    std::wstring bmpPath = tempPath;
+    bmpPath += L".bmp";
+    MoveFileExW(tempPath, bmpPath.c_str(), MOVEFILE_REPLACE_EXISTING);
+
+    HANDLE file = CreateFileW(bmpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DeleteFileW(bmpPath.c_str());
+        return std::nullopt;
+    }
+
+    DWORD written = 0;
+    const BOOL ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(file);
+    if (!ok || written != bytes.size()) {
+        DeleteFileW(bmpPath.c_str());
+        return std::nullopt;
+    }
+    return bmpPath;
+}
+
+enum class OcrScript {
+    Latin,
+    Vietnamese,
+    Japanese,
+    Korean,
+    Chinese,
+    Cyrillic,
+    Thai,
+    Unknown,
+};
+
+int ScoreOcrResult(const OcrResult& result, OcrScript script);
+
+std::wstring TesseractLanguageFor(const std::wstring& language) {
+    if (language.empty()) return L"";
+    if (language.rfind(L"en", 0) == 0) return L"eng";
+    if (language.rfind(L"vi", 0) == 0) return L"vie";
+    if (language.rfind(L"ja", 0) == 0) return L"jpn";
+    if (language.rfind(L"ko", 0) == 0) return L"kor";
+    if (language == L"zh-Hans") return L"chi_sim";
+    if (language == L"zh-Hant") return L"chi_tra";
+    if (language.rfind(L"fr", 0) == 0) return L"fra";
+    if (language.rfind(L"de", 0) == 0) return L"deu";
+    if (language.rfind(L"es", 0) == 0) return L"spa";
+    if (language.rfind(L"it", 0) == 0) return L"ita";
+    if (language.rfind(L"pt", 0) == 0) return L"por";
+    if (language.rfind(L"ru", 0) == 0) return L"rus";
+    if (language.rfind(L"th", 0) == 0) return L"tha";
+    return L"eng";
+}
+
+OcrScript ScriptForTesseractLanguage(std::wstring_view language) {
+    if (language == L"jpn") return OcrScript::Japanese;
+    if (language == L"kor") return OcrScript::Korean;
+    if (language == L"chi_sim" || language == L"chi_tra") return OcrScript::Chinese;
+    if (language == L"rus") return OcrScript::Cyrillic;
+    if (language == L"tha") return OcrScript::Thai;
+    if (language == L"vie") return OcrScript::Vietnamese;
+    return OcrScript::Latin;
+}
+
+std::vector<std::wstring> SplitTesseractLanguage(std::wstring_view language) {
+    std::vector<std::wstring> tokens;
+    size_t start = 0;
+    while (start <= language.size()) {
+        const size_t separator = language.find(L'+', start);
+        std::wstring token(language.substr(start, separator == std::wstring::npos ? std::wstring::npos : separator - start));
+        if (!token.empty()) {
+            tokens.push_back(token);
+        }
+        if (separator == std::wstring::npos) {
+            break;
+        }
+        start = separator + 1;
+    }
+    return tokens;
+}
+
+bool HasTesseractLanguageData(const std::wstring& tessdataDir, std::wstring_view language) {
+    for (const std::wstring& token : SplitTesseractLanguage(language)) {
+        if (!FileExists(tessdataDir + L"\\" + token + L".traineddata")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::wstring> AvailableTesseractLanguages(const std::wstring& tessdataDir) {
+    std::vector<std::wstring> languages;
+    WIN32_FIND_DATAW data{};
+    HANDLE find = FindFirstFileW((tessdataDir + L"\\*.traineddata").c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+        return languages;
+    }
+
+    do {
+        std::wstring file = data.cFileName;
+        const std::wstring suffix = L".traineddata";
+        if (file.size() > suffix.size() && file.substr(file.size() - suffix.size()) == suffix) {
+            file.resize(file.size() - suffix.size());
+            languages.push_back(file);
+        }
+    } while (FindNextFileW(find, &data));
+
+    FindClose(find);
+    return languages;
+}
+
+std::string RemoveTesseractNoise(std::string text) {
+    std::string cleaned;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t end = text.find('\n', start);
+        const bool lastLine = end == std::string::npos;
+        std::string line = text.substr(start, lastLine ? std::string::npos : end - start);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        const bool isNoise =
+            line.rfind("Warning.", 0) == 0 ||
+            line.rfind("Error in pix", 0) == 0 ||
+            line.rfind("Estimating resolution", 0) == 0 ||
+            line.rfind("Invalid resolution", 0) == 0;
+
+        if (!isNoise && !line.empty()) {
+            cleaned += line;
+            cleaned += '\n';
+        }
+
+        if (lastLine) {
+            break;
+        }
+        start = end + 1;
+    }
+    return cleaned;
+}
+
+struct ProcessOutput {
+    DWORD exitCode = 1;
+    std::string output;
+    std::string error;
+};
+
+std::optional<ProcessOutput> RunProcessCaptureStdout(std::wstring commandLine) {
+    SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    wchar_t tempDirectory[MAX_PATH]{};
+    wchar_t errorPath[MAX_PATH]{};
+    if (!CreatePipe(&readPipe, &writePipe, &security, 0)) {
+        return std::nullopt;
+    }
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    if (GetTempPathW(MAX_PATH, tempDirectory) == 0 ||
+        GetTempFileNameW(tempDirectory, L"jdt", 0, errorPath) == 0) {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return std::nullopt;
+    }
+
+    HANDLE errorFile = CreateFileW(errorPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, &security,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (errorFile == INVALID_HANDLE_VALUE) {
+        DeleteFileW(errorPath);
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return std::nullopt;
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = writePipe;
+    startup.hStdError = errorFile;
+
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                        nullptr, nullptr, &startup, &process);
+    CloseHandle(writePipe);
+    if (!created) {
+        CloseHandle(errorFile);
+        DeleteFileW(errorPath);
+        CloseHandle(readPipe);
+        return std::nullopt;
+    }
+
+    ProcessOutput result;
+    char buffer[4096]{};
+    DWORD read = 0;
+    while (ReadFile(readPipe, buffer, static_cast<DWORD>(sizeof(buffer)), &read, nullptr) && read > 0) {
+        result.output.append(buffer, buffer + read);
+    }
+
+    WaitForSingleObject(process.hProcess, INFINITE);
+    GetExitCodeProcess(process.hProcess, &result.exitCode);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    CloseHandle(readPipe);
+
+    SetFilePointer(errorFile, 0, nullptr, FILE_BEGIN);
+    char errorBuffer[4096]{};
+    DWORD errorRead = 0;
+    while (ReadFile(errorFile, errorBuffer, static_cast<DWORD>(sizeof(errorBuffer)), &errorRead, nullptr) && errorRead > 0) {
+        result.error.append(errorBuffer, errorBuffer + errorRead);
+    }
+    CloseHandle(errorFile);
+    DeleteFileW(errorPath);
+
+    return result;
+}
+
+OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Settings& settings) {
+    OcrResult output;
+    const std::vector<uint8_t> bytes = HBitmapToBmpBytes(bitmap, size);
+    if (bytes.empty()) {
+        output.errorMessage = L"Bundled Tesseract could not prepare the screenshot for OCR.";
+        return output;
+    }
+
+    auto runtime = FindBundledTesseractRuntime();
+    if (!runtime) {
+        output.errorMessage = L"Bundled Tesseract runtime not found.\n\n" + TesseractSearchHint();
+        return output;
+    }
+    const std::wstring& tesseractExe = runtime->executable;
+    const std::wstring& tessdataDir = runtime->tessdata;
+
+    auto imagePath = WriteTempBmp(bytes);
+    if (!imagePath) {
+        output.errorMessage = L"Bundled Tesseract could not create a temporary OCR image.";
+        return output;
+    }
+
+    std::vector<std::wstring> languages;
+    const std::wstring configuredLanguage = TesseractLanguageFor(settings.ocrLanguage);
+    if (configuredLanguage.empty()) {
+        languages = AvailableTesseractLanguages(tessdataDir);
+    } else {
+        languages.push_back(configuredLanguage);
+    }
+
+    if (languages.empty()) {
+        output.errorMessage = L"Bundled Tesseract has no language data files.\n\nExpected *.traineddata in:\n" + tessdataDir;
+        DeleteFileW(imagePath->c_str());
+        return output;
+    }
+
+    int bestScore = -1;
+    std::wstring lastError;
+    for (const std::wstring& language : languages) {
+        if (!HasTesseractLanguageData(tessdataDir, language)) {
+            lastError = L"Missing language data for " + language;
+            continue;
+        }
+
+        const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
+                                     L" stdout -l " + language + L" --tessdata-dir " +
+                                     Quote(tessdataDir) + L" --psm 6";
+
+        auto processOutput = RunProcessCaptureStdout(command);
+        if (!processOutput) {
+            lastError = L"Bundled Tesseract could not start.";
+            continue;
+        }
+        if (processOutput->exitCode != 0) {
+            lastError = Trim(Utf8ToWide(processOutput->error));
+            continue;
+        }
+
+        OcrResult candidate;
+        candidate.text = Trim(Utf8ToWide(RemoveTesseractNoise(processOutput->output)));
+        const int score = ScoreOcrResult(candidate, ScriptForTesseractLanguage(language));
+        if (!candidate.text.empty() && score > bestScore) {
+            bestScore = score;
+            output = std::move(candidate);
+        }
+    }
+
+    DeleteFileW(imagePath->c_str());
+    if (output.text.empty()) {
+        output.errorMessage = L"Bundled Tesseract ran, but did not find text.";
+        if (!lastError.empty()) {
+            output.errorMessage += L"\n\n" + lastError;
+        }
+    }
+    return output;
 }
 
 std::optional<CapturedBitmap> ScaleBitmapForOcr(HBITMAP sourceBitmap, SIZE sourceSize) {
@@ -168,17 +545,6 @@ OcrResult BuildResult(const winrt::Windows::Media::Ocr::OcrResult& result) {
 
     return output;
 }
-
-enum class OcrScript {
-    Latin,
-    Vietnamese,
-    Japanese,
-    Korean,
-    Chinese,
-    Cyrillic,
-    Thai,
-    Unknown,
-};
 
 struct CandidateOcrEngine {
     std::wstring tag;
@@ -357,6 +723,10 @@ OcrResult OcrEngine::Recognize(const CapturedBitmap& capture, const Settings& se
     auto scaled = ScaleBitmapForOcr(capture.bitmap, capture.size);
     HBITMAP ocrBitmap = scaled ? scaled->bitmap : capture.bitmap;
     SIZE ocrSize = scaled ? scaled->size : capture.size;
+
+    if (settings.ocrProvider == L"tesseract") {
+        return RecognizeWithBundledTesseract(ocrBitmap, ocrSize, settings);
+    }
 
     auto bytes = HBitmapToBmpBytes(ocrBitmap, ocrSize);
     if (bytes.empty()) {
