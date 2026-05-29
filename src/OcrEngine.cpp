@@ -174,6 +174,7 @@ enum class OcrScript {
 };
 
 int ScoreOcrResult(const OcrResult& result, OcrScript script);
+int MatchingScriptChars(std::wstring_view text, OcrScript script);
 
 std::wstring TesseractLanguageFor(const std::wstring& language) {
     if (language.empty()) return L"";
@@ -248,6 +249,81 @@ std::vector<std::wstring> AvailableTesseractLanguages(const std::wstring& tessda
 
     FindClose(find);
     return languages;
+}
+
+bool ContainsLanguage(const std::vector<std::wstring>& languages, std::wstring_view language) {
+    return std::find(languages.begin(), languages.end(), language) != languages.end();
+}
+
+std::vector<std::wstring> OrderedAutoTesseractLanguages(const std::wstring& tessdataDir) {
+    const std::vector<std::wstring> available = AvailableTesseractLanguages(tessdataDir);
+    std::vector<std::wstring> ordered;
+
+    auto addIfAvailable = [&](const wchar_t* language) {
+        if (ContainsLanguage(available, language) && !ContainsLanguage(ordered, language)) {
+            ordered.push_back(language);
+        }
+    };
+
+    if (ContainsLanguage(available, L"eng") && ContainsLanguage(available, L"vie")) {
+        ordered.push_back(L"eng+vie");
+    }
+
+    addIfAvailable(L"jpn");
+    addIfAvailable(L"kor");
+    addIfAvailable(L"chi_sim");
+    addIfAvailable(L"chi_tra");
+    addIfAvailable(L"eng");
+    addIfAvailable(L"vie");
+    addIfAvailable(L"fra");
+    addIfAvailable(L"deu");
+    addIfAvailable(L"spa");
+    addIfAvailable(L"ita");
+    addIfAvailable(L"por");
+    addIfAvailable(L"rus");
+    addIfAvailable(L"tha");
+
+    for (const std::wstring& language : available) {
+        addIfAvailable(language.c_str());
+    }
+    return ordered;
+}
+
+int WordLikeCount(std::wstring_view text) {
+    int count = 0;
+    bool inWord = false;
+    for (wchar_t ch : text) {
+        if (iswalnum(ch)) {
+            if (!inWord) {
+                ++count;
+                inWord = true;
+            }
+        } else {
+            inWord = false;
+        }
+    }
+    return count;
+}
+
+bool IsStrongTesseractResult(const OcrResult& result, OcrScript script, int score) {
+    if (result.text.size() < 8 || score < 80) {
+        return false;
+    }
+
+    switch (script) {
+    case OcrScript::Japanese:
+    case OcrScript::Korean:
+    case OcrScript::Chinese:
+    case OcrScript::Cyrillic:
+    case OcrScript::Thai:
+        return MatchingScriptChars(result.text, script) >= 4;
+    case OcrScript::Latin:
+    case OcrScript::Vietnamese:
+        return result.text.size() >= 24 && WordLikeCount(result.text) >= 4;
+    case OcrScript::Unknown:
+        return false;
+    }
+    return false;
 }
 
 std::string RemoveTesseractNoise(std::string text) {
@@ -380,7 +456,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
     std::vector<std::wstring> languages;
     const std::wstring configuredLanguage = TesseractLanguageFor(settings.ocrLanguage);
     if (configuredLanguage.empty()) {
-        languages = AvailableTesseractLanguages(tessdataDir);
+        languages = OrderedAutoTesseractLanguages(tessdataDir);
     } else {
         languages.push_back(configuredLanguage);
     }
@@ -415,10 +491,14 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
 
         OcrResult candidate;
         candidate.text = Trim(Utf8ToWide(RemoveTesseractNoise(processOutput->output)));
-        const int score = ScoreOcrResult(candidate, ScriptForTesseractLanguage(language));
+        const OcrScript script = ScriptForTesseractLanguage(language);
+        const int score = ScoreOcrResult(candidate, script);
         if (!candidate.text.empty() && score > bestScore) {
             bestScore = score;
             output = std::move(candidate);
+            if (settings.ocrLanguage.empty() && IsStrongTesseractResult(output, script, score)) {
+                break;
+            }
         }
     }
 
