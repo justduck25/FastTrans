@@ -31,6 +31,7 @@ struct TextBox {
 
 struct OcrResult {
     std::wstring text;
+    std::wstring errorMessage;
     std::vector<TextBox> lines;
     std::vector<TextBox> words;
 };

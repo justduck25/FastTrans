@@ -326,7 +326,7 @@ void AppController::TranslateFromScreen(HWND hwnd) {
     OcrResult ocr = ocr_.Recognize(*captured, settings_);
     const std::wstring source = NormalizeOcrText(ocr.text);
     if (source.empty()) {
-        overlay_.ShowMessage(L"No text found.", *region);
+        overlay_.ShowMessage(ocr.errorMessage.empty() ? L"No text found." : ocr.errorMessage, *region);
         return;
     }
 

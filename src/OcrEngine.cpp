@@ -140,7 +140,12 @@ std::wstring TesseractLanguageFor(const std::wstring& language) {
     return L"eng";
 }
 
-std::optional<std::string> RunProcessCaptureStdout(std::wstring commandLine) {
+struct ProcessOutput {
+    DWORD exitCode = 1;
+    std::string output;
+};
+
+std::optional<ProcessOutput> RunProcessCaptureStdout(std::wstring commandLine) {
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     HANDLE readPipe = nullptr;
     HANDLE writePipe = nullptr;
@@ -165,46 +170,67 @@ std::optional<std::string> RunProcessCaptureStdout(std::wstring commandLine) {
         return std::nullopt;
     }
 
-    std::string output;
+    ProcessOutput result;
     char buffer[4096]{};
     DWORD read = 0;
     while (ReadFile(readPipe, buffer, static_cast<DWORD>(sizeof(buffer)), &read, nullptr) && read > 0) {
-        output.append(buffer, buffer + read);
+        result.output.append(buffer, buffer + read);
     }
 
     WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
+    GetExitCodeProcess(process.hProcess, &result.exitCode);
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(readPipe);
 
-    if (exitCode != 0) {
-        return std::nullopt;
-    }
-    return output;
+    return result;
 }
 
 OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Settings& settings) {
     OcrResult output;
     const std::vector<uint8_t> bytes = HBitmapToBmpBytes(bitmap, size);
     if (bytes.empty()) {
+        output.errorMessage = L"Bundled Tesseract could not prepare the screenshot for OCR.";
         return output;
     }
 
     const std::wstring moduleDir = ModuleDirectory();
     const std::wstring tesseractExe = moduleDir + L"\\third_party\\tesseract\\tesseract.exe";
     const std::wstring tessdataDir = moduleDir + L"\\third_party\\tesseract\\tessdata";
-    if (!FileExists(tesseractExe) || !DirectoryExists(tessdataDir)) {
+    if (!FileExists(tesseractExe)) {
+        output.errorMessage = L"Bundled Tesseract runtime not found.\n\nExpected:\n" + tesseractExe;
+        return output;
+    }
+    if (!DirectoryExists(tessdataDir)) {
+        output.errorMessage = L"Bundled Tesseract tessdata folder not found.\n\nExpected:\n" + tessdataDir;
         return output;
     }
 
     auto imagePath = WriteTempBmp(bytes);
     if (!imagePath) {
+        output.errorMessage = L"Bundled Tesseract could not create a temporary OCR image.";
         return output;
     }
 
     const std::wstring language = TesseractLanguageFor(settings.ocrLanguage);
+    size_t languageStart = 0;
+    while (languageStart <= language.size()) {
+        const size_t separator = language.find(L'+', languageStart);
+        const std::wstring token = language.substr(languageStart, separator == std::wstring::npos ? std::wstring::npos : separator - languageStart);
+        if (!token.empty()) {
+            const std::wstring trainedData = tessdataDir + L"\\" + token + L".traineddata";
+            if (!FileExists(trainedData)) {
+                output.errorMessage = L"Bundled Tesseract language data not found.\n\nMissing:\n" + trainedData;
+                DeleteFileW(imagePath->c_str());
+                return output;
+            }
+        }
+        if (separator == std::wstring::npos) {
+            break;
+        }
+        languageStart = separator + 1;
+    }
+
     const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
                                  L" stdout -l " + language + L" --tessdata-dir " +
                                  Quote(tessdataDir) + L" --psm 6";
@@ -212,10 +238,22 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
     auto processOutput = RunProcessCaptureStdout(command);
     DeleteFileW(imagePath->c_str());
     if (!processOutput) {
+        output.errorMessage = L"Bundled Tesseract could not start.";
+        return output;
+    }
+    if (processOutput->exitCode != 0) {
+        output.errorMessage = L"Bundled Tesseract failed.";
+        const std::wstring details = Trim(Utf8ToWide(processOutput->output));
+        if (!details.empty()) {
+            output.errorMessage += L"\n\n" + details;
+        }
         return output;
     }
 
-    output.text = Trim(Utf8ToWide(*processOutput));
+    output.text = Trim(Utf8ToWide(processOutput->output));
+    if (output.text.empty()) {
+        output.errorMessage = L"Bundled Tesseract ran, but did not find text.";
+    }
     return output;
 }
 
