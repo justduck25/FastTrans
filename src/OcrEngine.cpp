@@ -265,14 +265,18 @@ std::vector<std::wstring> OrderedAutoTesseractLanguages(const std::wstring& tess
         }
     };
 
-    if (ContainsLanguage(available, L"eng") && ContainsLanguage(available, L"vie")) {
-        ordered.push_back(L"eng+vie");
-    }
-
+    // Try distinct scripts first. English OCR can produce plausible Latin noise
+    // from CJK text, so it must not get first chance in auto mode.
     addIfAvailable(L"jpn");
     addIfAvailable(L"kor");
     addIfAvailable(L"chi_sim");
     addIfAvailable(L"chi_tra");
+    addIfAvailable(L"rus");
+    addIfAvailable(L"tha");
+
+    if (ContainsLanguage(available, L"eng") && ContainsLanguage(available, L"vie")) {
+        ordered.push_back(L"eng+vie");
+    }
     addIfAvailable(L"eng");
     addIfAvailable(L"vie");
     addIfAvailable(L"fra");
@@ -280,8 +284,6 @@ std::vector<std::wstring> OrderedAutoTesseractLanguages(const std::wstring& tess
     addIfAvailable(L"spa");
     addIfAvailable(L"ita");
     addIfAvailable(L"por");
-    addIfAvailable(L"rus");
-    addIfAvailable(L"tha");
 
     for (const std::wstring& language : available) {
         addIfAvailable(language.c_str());
@@ -319,7 +321,7 @@ bool IsStrongTesseractResult(const OcrResult& result, OcrScript script, int scor
         return MatchingScriptChars(result.text, script) >= 4;
     case OcrScript::Latin:
     case OcrScript::Vietnamese:
-        return result.text.size() >= 24 && WordLikeCount(result.text) >= 4;
+        return false;
     case OcrScript::Unknown:
         return false;
     }
@@ -477,7 +479,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
 
         const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
                                      L" stdout -l " + language + L" --tessdata-dir " +
-                                     Quote(tessdataDir) + L" --psm 6";
+                                     Quote(tessdataDir) + L" --oem 1 --psm 6";
 
         auto processOutput = RunProcessCaptureStdout(command);
         if (!processOutput) {
