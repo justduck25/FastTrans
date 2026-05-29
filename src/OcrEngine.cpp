@@ -180,6 +180,36 @@ std::wstring TesseractLanguageFor(const std::wstring& language) {
     return L"eng";
 }
 
+std::string RemoveTesseractNoise(std::string text) {
+    std::string cleaned;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t end = text.find('\n', start);
+        const bool lastLine = end == std::string::npos;
+        std::string line = text.substr(start, lastLine ? std::string::npos : end - start);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        const bool isNoise =
+            line.rfind("Warning.", 0) == 0 ||
+            line.rfind("Error in pix", 0) == 0 ||
+            line.rfind("Estimating resolution", 0) == 0 ||
+            line.rfind("Invalid resolution", 0) == 0;
+
+        if (!isNoise && !line.empty()) {
+            cleaned += line;
+            cleaned += '\n';
+        }
+
+        if (lastLine) {
+            break;
+        }
+        start = end + 1;
+    }
+    return cleaned;
+}
+
 struct ProcessOutput {
     DWORD exitCode = 1;
     std::string output;
@@ -269,7 +299,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
 
     const std::wstring command = Quote(tesseractExe) + L" " + Quote(*imagePath) +
                                  L" stdout -l " + language + L" --tessdata-dir " +
-                                 Quote(tessdataDir) + L" --psm 6";
+                                 Quote(tessdataDir) + L" --psm 6 --dpi 300";
 
     auto processOutput = RunProcessCaptureStdout(command);
     DeleteFileW(imagePath->c_str());
@@ -286,7 +316,7 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
         return output;
     }
 
-    output.text = Trim(Utf8ToWide(processOutput->output));
+    output.text = Trim(Utf8ToWide(RemoveTesseractNoise(processOutput->output)));
     if (output.text.empty()) {
         output.errorMessage = L"Bundled Tesseract ran, but did not find text.";
     }
