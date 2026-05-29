@@ -91,6 +91,46 @@ bool DirectoryExists(const std::wstring& path) {
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+std::wstring ParentDirectory(std::wstring path) {
+    const size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        path.resize(slash);
+    }
+    return path;
+}
+
+struct TesseractRuntime {
+    std::wstring executable;
+    std::wstring tessdata;
+};
+
+std::optional<TesseractRuntime> FindBundledTesseractRuntime() {
+    const std::wstring moduleDir = ModuleDirectory();
+    const std::wstring exeRelative = L"\\third_party\\tesseract\\tesseract.exe";
+    const std::wstring dataRelative = L"\\third_party\\tesseract\\tessdata";
+
+    std::vector<std::wstring> bases;
+    bases.push_back(moduleDir);
+    bases.push_back(ParentDirectory(moduleDir));
+    bases.push_back(ParentDirectory(ParentDirectory(moduleDir)));
+
+    for (const std::wstring& base : bases) {
+        TesseractRuntime runtime{base + exeRelative, base + dataRelative};
+        if (FileExists(runtime.executable) && DirectoryExists(runtime.tessdata)) {
+            return runtime;
+        }
+    }
+    return std::nullopt;
+}
+
+std::wstring TesseractSearchHint() {
+    const std::wstring moduleDir = ModuleDirectory();
+    const std::wstring rootDir = ParentDirectory(ParentDirectory(moduleDir));
+    return L"Searched:\n" +
+           moduleDir + L"\\third_party\\tesseract\n" +
+           rootDir + L"\\third_party\\tesseract";
+}
+
 std::optional<std::wstring> WriteTempBmp(const std::vector<uint8_t>& bytes) {
     wchar_t tempDirectory[MAX_PATH]{};
     if (GetTempPathW(MAX_PATH, tempDirectory) == 0) {
@@ -194,17 +234,13 @@ OcrResult RecognizeWithBundledTesseract(HBITMAP bitmap, SIZE size, const Setting
         return output;
     }
 
-    const std::wstring moduleDir = ModuleDirectory();
-    const std::wstring tesseractExe = moduleDir + L"\\third_party\\tesseract\\tesseract.exe";
-    const std::wstring tessdataDir = moduleDir + L"\\third_party\\tesseract\\tessdata";
-    if (!FileExists(tesseractExe)) {
-        output.errorMessage = L"Bundled Tesseract runtime not found.\n\nExpected:\n" + tesseractExe;
+    auto runtime = FindBundledTesseractRuntime();
+    if (!runtime) {
+        output.errorMessage = L"Bundled Tesseract runtime not found.\n\n" + TesseractSearchHint();
         return output;
     }
-    if (!DirectoryExists(tessdataDir)) {
-        output.errorMessage = L"Bundled Tesseract tessdata folder not found.\n\nExpected:\n" + tessdataDir;
-        return output;
-    }
+    const std::wstring& tesseractExe = runtime->executable;
+    const std::wstring& tessdataDir = runtime->tessdata;
 
     auto imagePath = WriteTempBmp(bytes);
     if (!imagePath) {
